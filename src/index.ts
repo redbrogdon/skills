@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { parseSource, getOwnerRepo } from './source-parser.js';
 import { cloneRepo, cleanupTempDir } from './git.js';
 import { discoverSkills, getSkillDisplayName } from './skills.js';
-import { installSkillForAgent, isSkillInstalled, getCanonicalPath, getInstallPath } from './installer.js';
+import { installSkillForAgent, isSkillInstalled, getCanonicalPath, getInstallPath, type InstallMode } from './installer.js';
 import { homedir } from 'os';
 
 /**
@@ -301,6 +301,27 @@ async function main(source: string, options: Options) {
       installGlobally = scope as boolean;
     }
 
+    // Prompt for install mode (symlink vs copy)
+    let installMode: InstallMode = 'symlink';
+
+    if (!options.yes) {
+      const modeChoice = await p.select({
+        message: 'Installation method',
+        options: [
+          { value: 'symlink', label: 'Symlink (Recommended)', hint: 'Single source of truth, easy updates' },
+          { value: 'copy', label: 'Copy to all agents', hint: 'Independent copies for each agent' },
+        ],
+      });
+
+      if (p.isCancel(modeChoice)) {
+        p.cancel('Installation cancelled');
+        await cleanup(tempDir);
+        process.exit(0);
+      }
+
+      installMode = modeChoice as InstallMode;
+    }
+
     const cwd = process.cwd();
     const summaryLines: string[] = [];
     const overwriteStatus = new Map<string, Map<string, boolean>>();
@@ -320,16 +341,20 @@ async function main(source: string, options: Options) {
     for (const skill of selectedSkills) {
       if (summaryLines.length > 0) summaryLines.push('');
       
-      const canonicalPath = getCanonicalPath(skill.name, { global: installGlobally });
-      const shortCanonical = shortenPath(canonicalPath, cwd);
-      summaryLines.push(`${chalk.cyan(shortCanonical)}`);
+      if (installMode === 'symlink') {
+        const canonicalPath = getCanonicalPath(skill.name, { global: installGlobally });
+        const shortCanonical = shortenPath(canonicalPath, cwd);
+        summaryLines.push(`${chalk.cyan(shortCanonical)}`);
+        summaryLines.push(`  ${chalk.dim('symlink →')} ${formatList(agentNames)}`);
+      } else {
+        summaryLines.push(`${chalk.cyan(getSkillDisplayName(skill))}`);
+        summaryLines.push(`  ${chalk.dim('copy →')} ${formatList(agentNames)}`);
+      }
       
       const skillOverwrites = overwriteStatus.get(skill.name);
       const overwriteAgents = targetAgents
         .filter(a => skillOverwrites?.get(a))
         .map(a => agents[a].displayName);
-      
-      summaryLines.push(`  ${chalk.dim('→')} ${formatList(agentNames)}`);
       
       if (overwriteAgents.length > 0) {
         summaryLines.push(`  ${chalk.yellow('overwrites:')} ${formatList(overwriteAgents)}`);
@@ -351,11 +376,11 @@ async function main(source: string, options: Options) {
 
     spinner.start('Installing skills...');
 
-    const results: { skill: string; agent: string; success: boolean; path: string; canonicalPath?: string; symlinkFailed?: boolean; error?: string }[] = [];
+    const results: { skill: string; agent: string; success: boolean; path: string; canonicalPath?: string; mode: InstallMode; symlinkFailed?: boolean; error?: string }[] = [];
 
     for (const skill of selectedSkills) {
       for (const agent of targetAgents) {
-        const result = await installSkillForAgent(skill, agent, { global: installGlobally });
+        const result = await installSkillForAgent(skill, agent, { global: installGlobally, mode: installMode });
         results.push({
           skill: getSkillDisplayName(skill),
           agent: agents[agent].displayName,
@@ -405,31 +430,42 @@ async function main(source: string, options: Options) {
       
       const skillCount = bySkill.size;
       const agentCount = new Set(successful.map(r => r.agent)).size;
-      const symlinkFailures = successful.filter(r => r.symlinkFailed);
+      const symlinkFailures = successful.filter(r => r.mode === 'symlink' && r.symlinkFailed);
       const copiedAgents = symlinkFailures.map(r => r.agent);
       const resultLines: string[] = [];
       
-      for (const [, skillResults] of bySkill) {
+      for (const [skillName, skillResults] of bySkill) {
         const firstResult = skillResults[0]!;
-        if (firstResult.canonicalPath) {
-          const shortPath = shortenPath(firstResult.canonicalPath, cwd);
-          resultLines.push(`${chalk.green('✓')} ${shortPath}`);
-        }
-        const symlinked = skillResults.filter(r => !r.symlinkFailed).map(r => r.agent);
-        const copied = skillResults.filter(r => r.symlinkFailed).map(r => r.agent);
         
-        if (symlinked.length > 0) {
-          resultLines.push(`  ${chalk.dim('→')} ${formatList(symlinked)}`);
-        }
-        if (copied.length > 0) {
-          resultLines.push(`  ${chalk.yellow('copied →')} ${formatList(copied)}`);
+        if (firstResult.mode === 'copy') {
+          // Copy mode: show skill name and list all agent paths
+          resultLines.push(`${chalk.green('✓')} ${skillName} ${chalk.dim('(copied)')}`);
+          for (const r of skillResults) {
+            const shortPath = shortenPath(r.path, cwd);
+            resultLines.push(`  ${chalk.dim('→')} ${shortPath}`);
+          }
+        } else {
+          // Symlink mode: show canonical path and symlinked agents
+          if (firstResult.canonicalPath) {
+            const shortPath = shortenPath(firstResult.canonicalPath, cwd);
+            resultLines.push(`${chalk.green('✓')} ${shortPath}`);
+          }
+          const symlinked = skillResults.filter(r => !r.symlinkFailed).map(r => r.agent);
+          const copied = skillResults.filter(r => r.symlinkFailed).map(r => r.agent);
+          
+          if (symlinked.length > 0) {
+            resultLines.push(`  ${chalk.dim('symlink →')} ${formatList(symlinked)}`);
+          }
+          if (copied.length > 0) {
+            resultLines.push(`  ${chalk.yellow('copied →')} ${formatList(copied)}`);
+          }
         }
       }
       
       const title = chalk.green(`Installed ${skillCount} skill${skillCount !== 1 ? 's' : ''} to ${agentCount} agent${agentCount !== 1 ? 's' : ''}`);
       p.note(resultLines.join('\n'), title);
       
-      // Show symlink failure warning
+      // Show symlink failure warning (only for symlink mode)
       if (symlinkFailures.length > 0) {
         p.log.warn(chalk.yellow(`Symlinks failed for: ${formatList(copiedAgents)}`));
         p.log.message(chalk.dim('  Files were copied instead. On Windows, enable Developer Mode for symlink support.'));
