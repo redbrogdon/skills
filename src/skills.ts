@@ -5,6 +5,15 @@ import type { Skill } from './types.js';
 
 const SKIP_DIRS = ['node_modules', '.git', 'dist', 'build', '__pycache__'];
 
+/**
+ * Check if internal skills should be installed.
+ * Internal skills are hidden by default unless INSTALL_INTERNAL_SKILLS=1 is set.
+ */
+export function shouldInstallInternalSkills(): boolean {
+  const envValue = process.env.INSTALL_INTERNAL_SKILLS;
+  return envValue === '1' || envValue === 'true';
+}
+
 async function hasSkillMd(dir: string): Promise<boolean> {
   try {
     const skillPath = join(dir, 'SKILL.md');
@@ -21,6 +30,12 @@ async function parseSkillMd(skillMdPath: string): Promise<Skill | null> {
     const { data } = matter(content);
 
     if (!data.name || !data.description) {
+      return null;
+    }
+
+    // Skip internal skills unless INSTALL_INTERNAL_SKILLS=1 is set
+    const isInternal = data.metadata?.internal === true;
+    if (isInternal && !shouldInstallInternalSkills()) {
       return null;
     }
 
