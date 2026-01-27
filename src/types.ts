@@ -2,7 +2,7 @@ export type AgentType =
   | 'amp'
   | 'antigravity'
   | 'claude-code'
-  | 'clawdbot'
+  | 'moltbot'
   | 'cline'
   | 'codebuddy'
   | 'codex'
@@ -28,7 +28,8 @@ export type AgentType =
   | 'roo'
   | 'trae'
   | 'windsurf'
-  | 'zencoder';
+  | 'zencoder'
+  | 'pochi';
 
 export interface Skill {
   name: string;
