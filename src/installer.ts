@@ -729,7 +729,7 @@ export async function listInstalledSkills(
   const skillsMap: Map<string, InstalledSkill> = new Map();
   const scopes: Array<{ global: boolean; path: string; agentType?: AgentType }> = [];
 
-  // Detect which agents are actually installed (fixes issue #225)
+  // Detect which agents are actually installed
   const detectedAgents = await detectInstalledAgents();
   const agentFilter = options.agentFilter;
   const agentsToCheck = agentFilter
@@ -767,7 +767,7 @@ export async function listInstalledSkills(
     // Add canonical directory
     scopes.push({ global: isGlobal, path: getCanonicalSkillsDir(isGlobal, cwd) });
 
-    // Add each installed agent's skills directory (fixes issue #225 part 2)
+    // Add each installed agent's skills directory
     for (const agentType of agentsToCheck) {
       const agent = agents[agentType];
       if (isGlobal && agent.globalSkillsDir === undefined) {
@@ -866,6 +866,34 @@ export async function listInstalledSkills(
               break;
             } catch {
               // Try next name
+            }
+          }
+
+          // Fallback: scan all directories and check SKILL.md files
+          // Handles cases where directory names don't match (e.g., "git-review" vs "Git Review Before Commit")
+          if (!found) {
+            try {
+              const agentEntries = await readdir(agentBase, { withFileTypes: true });
+              for (const agentEntry of agentEntries) {
+                if (!agentEntry.isDirectory()) continue;
+
+                const candidateDir = join(agentBase, agentEntry.name);
+                if (!isPathSafe(agentBase, candidateDir)) continue;
+
+                try {
+                  const candidateSkillMd = join(candidateDir, 'SKILL.md');
+                  await stat(candidateSkillMd);
+                  const candidateSkill = await parseSkillMd(candidateSkillMd);
+                  if (candidateSkill && candidateSkill.name === skill.name) {
+                    found = true;
+                    break;
+                  }
+                } catch {
+                  // Not a valid skill directory
+                }
+              }
+            } catch {
+              // Agent base directory doesn't exist
             }
           }
 
