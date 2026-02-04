@@ -157,11 +157,17 @@ export async function promptForAgents(
 async function selectAgentsInteractive(options: {
   global?: boolean;
 }): Promise<AgentType[] | symbol> {
-  const allAgents = Object.keys(agents) as AgentType[];
+  const allAgents = (Object.keys(agents) as AgentType[]).filter((a) => {
+    // Filter out agents that don't support global installation when --global is used
+    if (options.global && !agents[a].globalSkillsDir) {
+      return false;
+    }
+    return true;
+  });
   const agentChoices = allAgents.map((a) => ({
     value: a,
     label: agents[a].displayName,
-    hint: `${options.global ? agents[a].globalSkillsDir : agents[a].skillsDir}`,
+    hint: options.global ? agents[a].globalSkillsDir! : agents[a].skillsDir,
   }));
 
   return promptForAgents('Which agents do you want to install to?', agentChoices);
