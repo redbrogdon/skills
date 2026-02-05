@@ -168,8 +168,8 @@ export async function discoverSkills(
     }
   }
 
-  // Fall back to recursive search if nothing found
-  if (skills.length === 0) {
+  // Fall back to recursive search if nothing found, or if fullDepth is set
+  if (skills.length === 0 || options?.fullDepth) {
     const allSkillDirs = await findSkillDirs(searchPath);
 
     for (const skillDir of allSkillDirs) {
